@@ -18,7 +18,7 @@
 - 🔄 Automatic map reload via `map` (or `host_workshop_map` for workshop maps) when tick drift conditions are likely
 - 🧩 Workshop-aware — uses `host_workshop_map <workshopId>` when the current map has a workshop ID, otherwise falls back to `map <mapName>`
 - ⏱️ Configurable map-age threshold (defaults to 1 hour)
-- 👤 Triggers only when exactly one human player is on the server (zero disruption to active sessions)
+- 👤 Triggers only when the server is empty (zero disruption — no one is playing when the restart fires)
 
 ## Commands
 
@@ -46,17 +46,17 @@ Config file: `addons/swiftlys2/plugins/MapRestart/config.jsonc`
 
 ## How It Works
 
-CS2 servers develop "tick drift" when a map stays loaded for extended periods. This plugin reloads the map to reset tick state, but only when no active session would be disrupted.
+CS2 servers develop "tick drift" when a map stays loaded for extended periods. This plugin reloads the map to reset tick state, but only when the server is empty so no active session is disrupted.
 
-On `OnMapLoad`, the plugin records the map name and timestamp. On `OnClientPutInServer`, it checks whether the map has exceeded `MapRestartThresholdMinutes`. If so, it waits 2 seconds and counts non-bot players — if exactly **one** human is present, the map is reloaded via `host_workshop_map <workshopId>` (workshop maps) or `map <mapName>` (built-in maps).
+On `OnMapLoad`, the plugin records the map name and timestamp. On `OnClientDisconnected`, it checks whether the map has exceeded `MapRestartThresholdMinutes`. If so, it waits 2 seconds and counts non-bot players — if **zero** humans remain, the map is reloaded via `host_workshop_map <workshopId>` (workshop maps) or `map <mapName>` (built-in maps).
 
 ```
 OnMapLoad → store map + timestamp
        │
        ▼
-OnClientPutInServer
+OnClientDisconnected
        │
-       └─ map age ≥ threshold → wait 2s → humans == 1 → reload map
+       └─ map age ≥ threshold → wait 2s → humans == 0 → reload map
 ```
 
 ## Building

@@ -13,7 +13,7 @@ namespace MapRestart;
     Version = "1.0.0",
     Name = "MapRestart",
     Author = "Shmitzas",
-    Description = "Reloads the current map (via map / host_workshop_map) when only one human player is in the server and the map has been running for over an hour, to mitigate tick drift."
+    Description = "Reloads the current map (via map / host_workshop_map) when the server is empty and the map has been running for over an hour, to mitigate tick drift."
 )]
 public partial class MapRestart : BasePlugin
 {
@@ -39,7 +39,7 @@ public partial class MapRestart : BasePlugin
         LoadConfig();
 
         Core.Event.OnMapLoad += OnMapLoad;
-        Core.Event.OnClientPutInServer += OnClientPutInServer;
+        Core.Event.OnClientDisconnected += OnClientDisconnected;
 
         // On hot reload we don't know when the map originally loaded, so
         // assume "now" — this avoids an immediate accidental restart.
@@ -56,7 +56,7 @@ public partial class MapRestart : BasePlugin
         _pendingEvaluation?.Dispose();
         _pendingEvaluation = null;
         Core.Event.OnMapLoad -= OnMapLoad;
-        Core.Event.OnClientPutInServer -= OnClientPutInServer;
+        Core.Event.OnClientDisconnected -= OnClientDisconnected;
     }
 
     private void LoadConfig()
@@ -101,7 +101,7 @@ public partial class MapRestart : BasePlugin
             logger.LogInformation("Map loaded: {Map} at {Time:O}", _currentMap, _mapLoadedAt);
     }
 
-    private void OnClientPutInServer(IOnClientPutInServerEvent @event)
+    private void OnClientDisconnected(IOnClientDisconnectedEvent @event)
     {
         if (_restartTriggered) return;
 
@@ -110,18 +110,18 @@ public partial class MapRestart : BasePlugin
         {
             if (cfg.DetailedLogging)
                 logger.LogInformation(
-                    "Client put in server — map age {Elapsed} below threshold ({Threshold} min); skipping.",
+                    "Client disconnected — map age {Elapsed} below threshold ({Threshold} min); skipping.",
                     elapsed, cfg.MapRestartThresholdMinutes);
             return;
         }
 
         if (cfg.DetailedLogging)
             logger.LogInformation(
-                "Client put in server — map age {Elapsed}; deferring human count check by 2s.",
+                "Client disconnected — map age {Elapsed}; deferring human count check by 2s.",
                 elapsed);
 
-        // The joining player is not always fully valid at this point, so
-        // defer the human count check to give them time to finish connecting.
+        // The disconnecting player may still register as valid the instant this
+        // event fires, so defer the human count check until the slot frees up.
         _pendingEvaluation?.Cancel();
         _pendingEvaluation?.Dispose();
         _pendingEvaluation = Core.Scheduler.DelayBySeconds(2, () =>
@@ -152,7 +152,7 @@ public partial class MapRestart : BasePlugin
                 "Evaluating restart — map age {Elapsed}, human player count: {Count}",
                 elapsed, humanCount);
 
-        if (humanCount != 1) return;
+        if (humanCount != 0) return;
 
         if (string.IsNullOrWhiteSpace(_currentMap))
         {
