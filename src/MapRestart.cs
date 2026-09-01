@@ -10,7 +10,7 @@ namespace MapRestart;
 
 [PluginMetadata(
     Id = "MapRestart",
-    Version = "1.0.0",
+    Version = "1.1.0",
     Name = "MapRestart",
     Author = "Shmitzas",
     Description = "Reloads the current map (via map / host_workshop_map) when the server is empty and the map has been running for over an hour, to mitigate tick drift."
