@@ -46,7 +46,7 @@ public partial class MapRestart : BasePlugin
         // assume "now" — this avoids an immediate accidental restart.
         _mapLoadedAt = DateTime.UtcNow;
         _restartTriggered = false;
-        ScheduleThresholdCheck();
+        StartPeriodicCheck();
 
         if (cfg.DetailedLogging)
             logger.LogInformation("MapRestart loaded. Threshold: {Minutes} minutes.", cfg.MapRestartThresholdMinutes);
@@ -104,41 +104,27 @@ public partial class MapRestart : BasePlugin
         _currentMap = @event.MapName;
         _mapLoadedAt = DateTime.UtcNow;
         _restartTriggered = false;
-        ScheduleThresholdCheck();
+        StartPeriodicCheck();
 
         if (cfg.DetailedLogging)
             logger.LogInformation("Map loaded: {Map} at {Time:O}", _currentMap, _mapLoadedAt);
     }
 
-    // Fires once at threshold time so a server that stayed empty since map
-    // load (no connects, no disconnects) still restarts on schedule.
-    private void ScheduleThresholdCheck()
+    // Ticks every minute so we still restart when nobody connects or
+    // disconnects to trigger an event-driven check.
+    private void StartPeriodicCheck()
     {
-        if (_restartTriggered) return;
-
-        var elapsed = DateTime.UtcNow - _mapLoadedAt;
-        var threshold = TimeSpan.FromMinutes(cfg.MapRestartThresholdMinutes);
-        var remaining = threshold - elapsed;
-        var delaySeconds = remaining.TotalSeconds <= 0
-            ? 2
-            : Math.Max(2, (int)Math.Ceiling(remaining.TotalSeconds));
-
         if (cfg.DetailedLogging)
             logger.LogInformation(
-                "Threshold check scheduled in {Delay}s (elapsed {Elapsed}, threshold {Threshold} min).",
-                delaySeconds, elapsed, cfg.MapRestartThresholdMinutes);
+                "Periodic restart check armed (threshold {Threshold} min, tick 60s).",
+                cfg.MapRestartThresholdMinutes);
 
-        _thresholdTimer = Core.Scheduler.DelayBySeconds(delaySeconds, () =>
+        _thresholdTimer = Core.Scheduler.RepeatBySeconds(60, () =>
         {
-            _thresholdTimer = null;
-            var newElapsed = DateTime.UtcNow - _mapLoadedAt;
-            if (newElapsed < TimeSpan.FromMinutes(cfg.MapRestartThresholdMinutes))
-            {
-                // Config was reloaded with a larger threshold; requeue.
-                ScheduleThresholdCheck();
-                return;
-            }
-            EvaluateRestart(newElapsed);
+            if (_restartTriggered) return;
+            var elapsed = DateTime.UtcNow - _mapLoadedAt;
+            if (elapsed < TimeSpan.FromMinutes(cfg.MapRestartThresholdMinutes)) return;
+            EvaluateRestart(elapsed);
         });
     }
 
@@ -195,12 +181,6 @@ public partial class MapRestart : BasePlugin
 
         if (humanCount != 0) return;
 
-        if (string.IsNullOrWhiteSpace(_currentMap))
-        {
-            logger.LogWarning("Restart conditions met but current map name is unknown; skipping.");
-            return;
-        }
-
         if (Core.Engine is not { } engine)
         {
             logger.LogWarning("Restart conditions met but Core.Engine is unavailable; skipping.");
@@ -209,6 +189,13 @@ public partial class MapRestart : BasePlugin
 
         var workshopId = engine.WorkshopId;
         var isWorkshop = !string.IsNullOrWhiteSpace(workshopId);
+
+        if (!isWorkshop && string.IsNullOrWhiteSpace(_currentMap))
+        {
+            logger.LogWarning("Restart conditions met but neither current map name nor workshop ID is known; skipping.");
+            return;
+        }
+
         var mapToLoad = isWorkshop ? workshopId : _currentMap;
         var command = isWorkshop ? "host_workshop_map" : "map";
         var fullCommand = $"{command} {mapToLoad}";
