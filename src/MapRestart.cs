@@ -26,6 +26,7 @@ public partial class MapRestart : BasePlugin
     private DateTime _mapLoadedAt = DateTime.UtcNow;
     private bool _restartTriggered;
     private CancellationTokenSource? _pendingEvaluation;
+    private CancellationTokenSource? _thresholdTimer;
 
     public MapRestart(ISwiftlyCore core) : base(core) { }
 
@@ -45,6 +46,7 @@ public partial class MapRestart : BasePlugin
         // assume "now" — this avoids an immediate accidental restart.
         _mapLoadedAt = DateTime.UtcNow;
         _restartTriggered = false;
+        ScheduleThresholdCheck();
 
         if (cfg.DetailedLogging)
             logger.LogInformation("MapRestart loaded. Threshold: {Minutes} minutes.", cfg.MapRestartThresholdMinutes);
@@ -55,6 +57,9 @@ public partial class MapRestart : BasePlugin
         _pendingEvaluation?.Cancel();
         _pendingEvaluation?.Dispose();
         _pendingEvaluation = null;
+        _thresholdTimer?.Cancel();
+        _thresholdTimer?.Dispose();
+        _thresholdTimer = null;
         Core.Event.OnMapLoad -= OnMapLoad;
         Core.Event.OnClientDisconnected -= OnClientDisconnected;
     }
@@ -92,13 +97,49 @@ public partial class MapRestart : BasePlugin
         _pendingEvaluation?.Cancel();
         _pendingEvaluation?.Dispose();
         _pendingEvaluation = null;
+        _thresholdTimer?.Cancel();
+        _thresholdTimer?.Dispose();
+        _thresholdTimer = null;
 
         _currentMap = @event.MapName;
         _mapLoadedAt = DateTime.UtcNow;
         _restartTriggered = false;
+        ScheduleThresholdCheck();
 
         if (cfg.DetailedLogging)
             logger.LogInformation("Map loaded: {Map} at {Time:O}", _currentMap, _mapLoadedAt);
+    }
+
+    // Fires once at threshold time so a server that stayed empty since map
+    // load (no connects, no disconnects) still restarts on schedule.
+    private void ScheduleThresholdCheck()
+    {
+        if (_restartTriggered) return;
+
+        var elapsed = DateTime.UtcNow - _mapLoadedAt;
+        var threshold = TimeSpan.FromMinutes(cfg.MapRestartThresholdMinutes);
+        var remaining = threshold - elapsed;
+        var delaySeconds = remaining.TotalSeconds <= 0
+            ? 2
+            : Math.Max(2, (int)Math.Ceiling(remaining.TotalSeconds));
+
+        if (cfg.DetailedLogging)
+            logger.LogInformation(
+                "Threshold check scheduled in {Delay}s (elapsed {Elapsed}, threshold {Threshold} min).",
+                delaySeconds, elapsed, cfg.MapRestartThresholdMinutes);
+
+        _thresholdTimer = Core.Scheduler.DelayBySeconds(delaySeconds, () =>
+        {
+            _thresholdTimer = null;
+            var newElapsed = DateTime.UtcNow - _mapLoadedAt;
+            if (newElapsed < TimeSpan.FromMinutes(cfg.MapRestartThresholdMinutes))
+            {
+                // Config was reloaded with a larger threshold; requeue.
+                ScheduleThresholdCheck();
+                return;
+            }
+            EvaluateRestart(newElapsed);
+        });
     }
 
     private void OnClientDisconnected(IOnClientDisconnectedEvent @event)

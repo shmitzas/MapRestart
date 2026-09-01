@@ -48,15 +48,19 @@ Config file: `addons/swiftlys2/plugins/MapRestart/config.jsonc`
 
 CS2 servers develop "tick drift" when a map stays loaded for extended periods. This plugin reloads the map to reset tick state, but only when the server is empty so no active session is disrupted.
 
-On `OnMapLoad`, the plugin records the map name and timestamp. On `OnClientDisconnected`, it checks whether the map has exceeded `MapRestartThresholdMinutes`. If so, it waits 2 seconds and counts non-bot players — if **zero** humans remain, the map is reloaded via `host_workshop_map <workshopId>` (workshop maps) or `map <mapName>` (built-in maps).
+On `OnMapLoad`, the plugin records the map name and timestamp and arms a one-shot timer for `MapRestartThresholdMinutes`. Two triggers can then fire the empty-server check:
+
+1. `OnClientDisconnected` — if the map has exceeded the threshold, waits 2 seconds and counts non-bot players.
+2. The one-shot scheduled timer — fires at threshold time so a server that stayed empty from map load still restarts on schedule.
+
+If **zero** humans remain when the check runs, the map is reloaded via `host_workshop_map <workshopId>` (workshop maps) or `map <mapName>` (built-in maps).
 
 ```
-OnMapLoad → store map + timestamp
+OnMapLoad → store map + timestamp + arm threshold timer
        │
-       ▼
-OnClientDisconnected
+       ├─ OnClientDisconnected → map age ≥ threshold → wait 2s → humans == 0 → reload map
        │
-       └─ map age ≥ threshold → wait 2s → humans == 0 → reload map
+       └─ threshold timer fires → humans == 0 → reload map
 ```
 
 ## Building
