@@ -15,7 +15,3 @@ Fixes a case where the map could reload while people were still playing. Worth u
 - A reload now needs two empty readings in a row instead of one.
 - `config.jsonc` is re-read on save, so `MapRestartThresholdMinutes` and
   `DetailedLogging` no longer need a server restart to take effect.
-
----
-
-Older releases: <https://github.com/shmitzas/MapRestart/releases>
