@@ -10,7 +10,7 @@ namespace MapRestart;
 
 [PluginMetadata(
     Id = "MapRestart",
-    Version = "1.1.0",
+    Version = "1.2.0",
     Name = "MapRestart",
     Author = "Shmitzas",
     Description = "Reloads the current map (via map / host_workshop_map) when the server is empty and the map has been running for over an hour, to mitigate tick drift."
@@ -22,9 +22,13 @@ public partial class MapRestart : BasePlugin
     private ILogger<MapRestart> logger = null!;
     private Config cfg = null!;
 
+    // A reload is irreversible for anyone playing, so one empty reading is never enough to act on.
+    private const int RequiredConsecutiveEmptyChecks = 2;
+
     private string _currentMap = string.Empty;
     private DateTime _mapLoadedAt = DateTime.UtcNow;
     private bool _restartTriggered;
+    private int _consecutiveEmptyChecks;
     private CancellationTokenSource? _pendingEvaluation;
     private CancellationTokenSource? _thresholdTimer;
 
@@ -46,6 +50,7 @@ public partial class MapRestart : BasePlugin
         // assume "now" — this avoids an immediate accidental restart.
         _mapLoadedAt = DateTime.UtcNow;
         _restartTriggered = false;
+        _consecutiveEmptyChecks = 0;
         StartPeriodicCheck();
 
         if (cfg.DetailedLogging)
@@ -89,7 +94,13 @@ public partial class MapRestart : BasePlugin
         var provider = services.BuildServiceProvider();
 
         logger = provider.GetRequiredService<ILogger<MapRestart>>();
-        cfg = provider.GetRequiredService<IOptions<Config>>().Value;
+        var cfgMonitor = provider.GetRequiredService<IOptionsMonitor<Config>>();
+        cfg = cfgMonitor.CurrentValue;
+        cfgMonitor.OnChange(newCfg =>
+        {
+            cfg = newCfg;
+            logger.LogWarning("MapRestart: config.jsonc reloaded.");
+        });
     }
 
     private void OnMapLoad(IOnMapLoadEvent @event)
@@ -104,6 +115,7 @@ public partial class MapRestart : BasePlugin
         _currentMap = @event.MapName;
         _mapLoadedAt = DateTime.UtcNow;
         _restartTriggered = false;
+        _consecutiveEmptyChecks = 0;
         StartPeriodicCheck();
 
         if (cfg.DetailedLogging)
@@ -165,8 +177,11 @@ public partial class MapRestart : BasePlugin
         int humanCount;
         try
         {
-            humanCount = Core.PlayerManager.GetAllValidPlayers()
-                .Count(p => p is { IsValid: true, IsFakeClient: false });
+            // Counts controllers, not pawns: IPlayer.IsValid (and GetAllValidPlayers, which
+            // filters on it) demands a pawn, so a full server reads as empty during the
+            // round-restart window where CS2 has destroyed every pawn and not yet respawned.
+            humanCount = Core.PlayerManager.GetAllPlayers()
+                .Count(p => p is { IsFakeClient: false, Controller: { IsValid: true, IsHLTV: false } });
         }
         catch (Exception ex)
         {
@@ -179,7 +194,20 @@ public partial class MapRestart : BasePlugin
                 "Evaluating restart — map age {Elapsed}, human player count: {Count}",
                 elapsed, humanCount);
 
-        if (humanCount != 0) return;
+        if (humanCount != 0)
+        {
+            _consecutiveEmptyChecks = 0;
+            return;
+        }
+
+        if (++_consecutiveEmptyChecks < RequiredConsecutiveEmptyChecks)
+        {
+            if (cfg.DetailedLogging)
+                logger.LogInformation(
+                    "Server read as empty ({Checks}/{Required}); waiting for the next check to confirm.",
+                    _consecutiveEmptyChecks, RequiredConsecutiveEmptyChecks);
+            return;
+        }
 
         if (Core.Engine is not { } engine)
         {
